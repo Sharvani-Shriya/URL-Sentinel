@@ -4,7 +4,7 @@
 
 ## Abstract
 
-Machine-learning classifiers for malicious URL detection routinely report accuracies above 99% on curated global datasets, yet this performance is known to degrade sharply — to as low as 55–60% — when the same features and models are applied to underrepresented regional domains, a limitation documented in prior work on Mongolian government and educational infrastructure. Closing this gap by manually engineering region-specific features does not scale: every new country or naming convention requires renewed feature engineering and retraining. This paper presents **ThreatLens**, a five-tier, latency-aware hybrid escalation architecture that resolves the trilemma of throughput, regional adaptability, and explainability without resorting to per-region feature hardcoding. ThreatLens routes the majority of incoming URLs through a fast, fully offline lexical classifier (Gradient Boosting, 73 engineered features, ~20 ms inference), and escalates only the subset of URLs for which the classifier's confidence falls below a calibrated threshold (empirically, approximately 13% of traffic) through progressively deeper verification tiers: live domain forensics (WHOIS, DNS, SSL/TLS), a Retrieval-Augmented Generation (RAG) knowledge base of 25,000 balanced, multi-regional URLs embedded via a sentence-transformer model, and a deterministic, rule-grounded Forensic Reasoning Engine that produces a human-readable, ReAct-style evidence trace without invoking a neural language model at inference time. Component outputs are combined through an empirically validated, confidence-gated fusion formula with a veto mechanism for high-certainty forensic evidence. On a 640,081-URL global holdout set, the primary Gradient Boosting classifier achieves 93.94% test accuracy (96.45% precision, 84.89% recall); an ablation study demonstrates that the RAG retrieval tier alone contributes a +2.90 percentage-point accuracy improvement and a +5.43 percentage-point precision improvement over the ML baseline. We further identify a methodological limitation common to this literature — row-level random train/test splitting, which permits same-domain URL leakage across partitions — and propose a domain-grouped evaluation protocol as a direction for more rigorous future benchmarking. We report failure modes transparently, including performance under regional class imbalance, and discuss the architecture's latency, memory, and scalability trade-offs.
+Machine-learning classifiers for malicious URL detection routinely report accuracies above 99% on curated global datasets, yet this performance is known to degrade sharply — to as low as 55–60% — when the same features and models are applied to underrepresented regional domains, a limitation documented in prior work on Mongolian government and educational infrastructure. Closing this gap by manually engineering region-specific features does not scale: every new country or naming convention requires renewed feature engineering and retraining. This paper presents **ThreatLens**, a five-tier, latency-aware hybrid escalation architecture that resolves the trilemma of throughput, regional adaptability, and explainability without resorting to per-region feature hardcoding. ThreatLens routes the majority of incoming URLs through a fast, fully offline lexical classifier (Gradient Boosting, 73 engineered features, ~20 ms inference), and escalates only the subset of URLs for which the classifier's confidence falls below a calibrated threshold  through progressively deeper verification tiers: live domain forensics (WHOIS, DNS, SSL/TLS), a Retrieval-Augmented Generation (RAG) knowledge base of 25,000 balanced, multi-regional URLs embedded via a sentence-transformer model, and a deterministic, rule-grounded Forensic Reasoning Engine that produces a human-readable, ReAct-style evidence trace without invoking a neural language model at inference time. Component outputs are combined through an empirically validated, confidence-gated fusion formula with a veto mechanism for high-certainty forensic evidence. On a 640,081-URL global holdout set, the primary Gradient Boosting classifier achieves 93.94% test accuracy (96.45% precision, 84.89% recall); an ablation study demonstrates that the RAG retrieval tier alone contributes a +2.90 percentage-point accuracy improvement and a +5.43 percentage-point precision improvement over the ML baseline. We further identify a methodological limitation common to this literature — row-level random train/test splitting, which permits same-domain URL leakage across partitions — and propose a domain-grouped evaluation protocol as a direction for more rigorous future benchmarking. We report failure modes transparently, including performance under regional class imbalance, and discuss the architecture's latency, memory, and scalability trade-offs.
 
 ------------------------------------------------------------------------
 
@@ -22,7 +22,7 @@ Countermeasures against malicious URLs in the existing literature span three bro
 
 **Feature-based machine learning classifiers** — typically Random Forest, Support Vector Machine, or Gradient Boosting models trained on lexical, host-based, and content-based URL attributes — generalize beyond static lists and represent the dominant baseline in the academic literature. However, these classifiers are static once trained, and their decision boundaries reflect the distribution of their training data. This creates a specific and well-documented failure mode: regional and domain distribution shift. Bat-Erdene et al. demonstrated this directly — a 52-feature Gradient Boosting classifier trained on a large global corpus achieved 99.87% accuracy on foreign URLs, yet its accuracy on Mongolian `.gov.mn`/`.edu.mn` infrastructure, evaluated on the same feature set, fell to 55–60% before any regional adjustment. The authors partially recovered performance (to 75.15–75.46%) by hand-engineering sixteen Mongolia-specific static features (`is_gov_domain`, `is_ministerial_domain`, `has_mongolian_region`, and related indicators). This recovery came at the cost of scalability: extending the same accuracy to a new country requires repeating the feature-engineering and retraining cycle for that country's specific naming conventions, an approach that does not scale to a global deployment covering many jurisdictions.
 
-**Agentic Large Language Model (LLM) and Retrieval-Augmented Generation (RAG) systems** can incorporate live network context, inspect dynamic page behavior, and generate human-readable threat explanations without requiring retraining. However, LLM inference latency (commonly exceeding 1500 ms per query) and the associated API or compute cost render naive "LLM-for-every-URL" designs impractical as a primary screening filter for high-throughput web traffic.
+**Agentic Large Language Model (LLM) and Retrieval-Augmented Generation (RAG) systems** represent a more recent paradigm that addresses several of the above limitations. RAG frameworks augment a classifier or reasoning engine with an external knowledge base — such as a vector-indexed repository of known threat patterns, regional domain registries, or curated URL datasets — by retrieving contextually similar entries at inference time and injecting them into the decision process. This retrieval mechanism allows a system to absorb new regional or temporal threat intelligence (for example, a newly emerging phishing campaign targeting a specific country's government portals) by adding documents to the knowledge base, without retraining the underlying model or re-engineering its feature set. Agentic LLM architectures extend this further by equipping a language model with tool-use capabilities — the ability to invoke live network forensic operations such as DNS resolution, WHOIS lookups, SSL/TLS certificate inspection, and live page content retrieval — and to reason over the combined retrieved and live evidence in a structured chain-of-thought or ReAct-style loop, producing human-readable threat explanations alongside a verdict. However, both mechanisms carry significant computational overhead when applied indiscriminately: a single RAG retrieval cycle involving embedding computation and vector similarity search adds tens to hundreds of milliseconds, and a full agentic LLM reasoning pass — involving multiple sequential tool invocations followed by neural inference — commonly exceeds 1500 ms per query. For an enterprise-grade URL screening system processing thousands of URLs per second, applying this depth of analysis to every incoming request is neither economically nor operationally viable. This motivates an architectural design in which RAG retrieval and agentic reasoning are reserved for the minority of URLs that a fast, lightweight classifier cannot resolve with sufficient confidence.
 
 ### 1.3 Key Contributions
 
@@ -52,15 +52,16 @@ Machine learning approaches to malicious URL detection have evolved from simple 
 
 The vulnerability of supervised URL classifiers under regional distribution shift is directly documented by Bat-Erdene et al., whose study forms the empirical baseline for the present work. Their study compiled a global corpus of 516,278 URLs (292,161 benign, 224,117 malicious) and a supplementary Mongolian regional dataset of 13,019 government (`.gov.mn`) and educational (`.edu.mn`) URLs, all verified benign. The authors' reported feature-set progression is summarized below.
 
-```
-21 Lexical Features        --> 89.85% Accuracy (Foreign dataset, Random Forest)
-36 Multi-Modal Features     --> 97.57% Accuracy (Foreign) / 57.56% Accuracy (Mongolian)
-52 Features                 --> 99.81% Accuracy (Foreign, Gradient Boosting) / 56.86% Accuracy (Mongolian)
-   (18 zero-value web features removed; 16 Mongolia-specific static features added)
-50 Final Features           --> 99.87% Accuracy (Foreign, Gradient Boosting) /
-                                 75.15% Accuracy (Mongolian, Gradient Boosting) /
-                                 75.46% Accuracy (Mongolian, Decision Tree — best reported)
-```
+**Table. Baseline study feature-set progression (Bat-Erdene et al.).**
+
+| Feature Set | Foreign Accuracy | Mongolian Accuracy | Best Classifier |
+|---|---|---|---|
+| 21 Lexical Features | 89.85% | — | Random Forest |
+| 36 Multi-Modal Features | 97.57% | 57.56% | Random Forest |
+| 52 Features | 99.81% | 56.86% | Gradient Boosting |
+| 50 Final Features | 99.87% | 75.15% (GB) / 75.46% (DT) | Gradient Boosting |
+
+*Between the 52-feature and 50-feature configurations, 18 web-access features returning zero values were removed and 16 Mongolia-specific static features were added.*
 
 *Note on feature-count reporting: the base study's own tables transition from a stated "52 features" (Tables 10–11) to a stated "50 features" (Tables 14–15) without an explicit reconciliation of the two-feature discrepancy in the source text; we report both figures as given rather than resolving the inconsistency on the authors' behalf.*
 
@@ -70,7 +71,7 @@ The authors' recovery of Mongolian-domain accuracy — from 56.86% to 75.15–75
 
 2. **Overfitting to structural tokens rather than behavior.** Hardcoding domain-structural prefixes as model features trains the classifier to associate safety with specific string tokens (e.g., the literal substring `gov`) rather than with the underlying threat behavior the token is meant to proxy for, which risks brittleness against adversaries who are aware of the feature set.
 
-We note for completeness that ThreatLens also relies on a small number of comparable static signals — specifically, a trusted-domain whitelist and a government-domain policy check (Section 3, Tier 0 and Tier 3). We distinguish our use of these mechanisms from the base study's approach in two respects: first, our whitelist and policy checks operate as pre- and post-processing gates external to the trained classifier's decision boundary, rather than as features baked into the model itself, and can therefore be updated without retraining; second, and more importantly, regional generalization in ThreatLens is delegated primarily to the Retrieval-Augmented Generation knowledge base (Section 2.3, Section 3, Tier 4), which extends to new regions by adding documents rather than by engineering new model features.
+We note for completeness that ThreatLens also relies on a small number of comparable static signals — specifically, a trusted-domain whitelist and a government-domain policy check. We distinguish our use of these mechanisms from the base study's approach in two respects: first, our whitelist and policy checks operate as pre- and post-processing gates external to the trained classifier's decision boundary, rather than as features baked into the model itself, and can therefore be updated without retraining; second, and more importantly, regional generalization in ThreatLens is delegated primarily to the Retrieval-Augmented Generation knowledge base, which extends to new regions by adding documents rather than by engineering new model features.
 
 ### 2.3 Retrieval-Augmented Generation and Agentic Architectures in Cybersecurity
 
@@ -116,20 +117,126 @@ Before any feature computation occurs, the URL's registrable base domain is chec
 
 ### 3.3 Tier 1: Fast-Path Machine Learning Classification
 
-URLs that do not match the whitelist are parsed into a 63-dimensional purely lexical feature vector (Section 4.3) and passed through a Gradient Boosting classifier trained offline on a 73-feature representation (Section 4.2). Two confidence overrides are applied prior to the confidence gate to correct for known classifier blind spots:
+#### 3.3.1 Offline Machine Learning Training Pipeline
 
-- **Free-hosting override.** If the base domain belongs to a known free-hosting platform (e.g., `weebly.com`, `netlify.app`, `github.io`, `firebaseapp.com`) and the classifier predicts benign, the benign confidence is capped at 0.70, forcing escalation. This override exists because phishing operators routinely abuse free-hosting platforms for instant, no-registration deployment, and a purely lexical classifier cannot distinguish a legitimate portfolio site from a credential-harvesting page hosted on the same platform, since both present identical domain-level features.
-- **Unicode override.** If the URL contains more than six Unicode-encoded character sequences (e.g., Arabic, Cyrillic, or CJK scripts) and the classifier predicts malicious, the malicious confidence is capped at 0.65, again forcing escalation rather than an immediate verdict. This override exists because legitimate non-Latin-script websites naturally exhibit high character entropy and non-ASCII character counts, which a lexical model trained predominantly on Latin-script URLs can misinterpret as an obfuscation signal.
+The fast-path classifier is trained offline using a structured multi-stage machine learning pipeline. The complete workflow—from raw data ingestion to artifact serialization—is illustrated in Figure 2 and detailed below.
 
-The confidence gate then applies asymmetric thresholds: a benign verdict is issued only if predicted confidence is at least 0.90, and a malicious verdict is issued only if predicted confidence is at least 0.92. The stricter threshold for malicious verdicts reflects a deliberate design choice: in a user-facing detection system, incorrectly blocking a legitimate URL (a false positive) is judged to carry a higher user-trust cost than allowing a borderline URL to proceed to deeper analysis. URLs falling below either threshold are escalated. Under these thresholds, approximately 13% of URLs are escalated in practice (Section 5.5).
+```mermaid
+flowchart TD
+    A[Raw Dataset
+~651k+ URLs] --> B[Deduplication & Label Binarization
+640,081 clean URLs · benign=0, malicious=1]
+    B --> C[Feature Engineering
++14 Statistical & Syntactic Features]
+    C --> D[Full Feature Matrix
+73 Total Features]
+    D --> E[Stratified Train/Test Split
+70% Train / 30% Test · random_state=42]
+    E --> F1[SVM]
+    E --> F2[Decision Tree]
+    E --> F3[Random Forest]
+    E --> F4[★ Gradient Boosting]
+    E --> F5[XGBoost]
+    F1 & F2 & F3 & F4 & F5 --> G[Model Evaluation
+Accuracy, Precision, Recall, F1]
+    G --> H[Model Selection & Artifact Serialization
+best_model_gradient boosting.joblib]
+```
+
+**Figure 2.** Offline Machine Learning Training and Model Selection Pipeline.
+
+The training pipeline executes four primary operational stages:
+
+1. **Data Ingestion and Label Binarization:** The pipeline ingests the primary dataset (`final_dataset_with_all_features_v3.1.csv`) containing over 651,000 raw samples. Duplicate URL entries are removed, yielding a deduplicated corpus of 640,081 unique URLs. Multi-class target labels are mapped to a binary representation where benign URLs are assigned label `0` and threat classes (`phishing`, `malware`, `defacement`) are assigned label `1`.
+2. **Feature Engineering (73 Dimensions):** In addition to 59 pre-extracted source CSV features (lexical counts, structural flags, phishing indicators, and historical web attributes), the pipeline computes 14 engineered statistical and syntactic features during preprocessing. These include URL Shannon entropy, digit-to-length and special-character ratios, subdomain density, Punycode (`xn--`) indicators, known URL shortener matches, raw IP address patterns, and suspicious top-level domain flags. Missing or non-finite values are imputed to `0`.
+3. **Stratified Partitioning and Multi-Model Benchmarking:** The 73-dimensional dataset is partitioned using a stratified 70/30 train/test split (`random_state=42`) to preserve exact class proportions across training (448,056 samples) and holdout testing (192,025 samples) sets. Five candidate classifiers are trained and benchmarked under identical conditions: Support Vector Machines (LinearSVC with probability calibration), Decision Trees, Random Forests, Gradient Boosting, and XGBoost.
+4. **Model Selection and Artifact Export:** Based on holdout test performance (Section 5.1), Gradient Boosting ($n_{\text{estimators}}=900$, $\mathtt{max\_depth}=7$) is selected as the primary production model, achieving the highest test accuracy (93.94%) and F1-score (90.30%). The trained model state and feature column ordering are serialized to disk as `best_model_gradient boosting.joblib` and `feature_columns.joblib` for online deployment.
+
+#### 3.3.2 Real-Time Fast-Path Inference and Confidence Overrides
+
+At inference time, incoming URLs that pass Tier 0 (the trusted-domain whitelist) are processed through Tier 1 fast-path classification:
+
+- **Pure Lexical Feature Extraction:** To ensure sub-20 ms latency with zero network dependency, a dedicated lightweight extractor (`simple_extractor.py`) extracts 63 pure lexical features directly from the URL string. The feature vector is aligned to the expected 73-column model schema, with the 10 infrastructure-dependent features (e.g., live WHOIS age, HTTP response status, SSL validity) zero-padded. As established in Section 4.2, tree-based ensembles handle this zero-padding without decision boundary distortion.
+- **Domain-Specific Confidence Overrides:** Before evaluating the confidence gate, two domain-specific rules adjust the model's raw output probability to handle structural edge cases:
+  - *Free-Hosting Override:* If a URL is hosted on a known free-hosting provider (e.g., `github.io`, `netlify.app`, `weebly.com`) and predicted as benign, its benign confidence score is capped at `0.70`. This forces the sample to escalate, preventing attackers from exploiting clean domain reputations on shared hosting platforms.
+  - *Unicode Script Override:* If a URL contains more than six Unicode-encoded sequences (e.g., non-Latin scripts) and is predicted as malicious, its malicious confidence is capped at `0.65`. This forces escalation to prevent false positives caused by naturally high character entropy in non-English domains.
+- **Asymmetric Confidence Gate:** The adjusted ML probability is evaluated against asymmetric confidence thresholds: a `BENIGN` verdict requires confidence $\ge 0.90$, while a `MALICIOUS` verdict requires confidence $\ge 0.92$. URLs meeting these criteria issue an immediate fast-path verdict (~20 ms). URLs falling within the uncertain interval ($<0.90$ for benign, $<0.92$ for malicious) are escalated to Tiers 2–5 for live forensic investigation and RAG-augmented reasoning. Under these thresholds, approximately 13% of URLs are escalated in practice.
 
 ### 3.4 Tiers 2–3: Live Domain Forensics and Regional Policy Checks
 
 Escalated URLs first pass through a fast domain-forensics check, which extracts government-related keywords from the URL string and queries live WHOIS data for domain registration age. A domain that is three days old or younger and simultaneously contains government-related keywords triggers an immediate `MALICIOUS` verdict at 95% confidence, reflecting a common zero-day phishing pattern in which attackers register a fresh domain to impersonate an official portal shortly before a campaign. If this early exit does not fire, the pipeline proceeds to a regional and government-policy check, which detects region-specific contextual markers (for example, Mongolian- or Indian-related domain patterns) and validates, via a dedicated policy tool, whether a URL using government-related keywords actually resolves to an official government top-level domain. The outputs of both checks feed forward into the final decision fusion rather than issuing an independent verdict at this stage (with the exception of the early-exit condition above).
 
-### 3.5 Tier 4: Regional Knowledge Retrieval (RAG)
+### 3.5 Tier 4: Regional Knowledge Retrieval via Retrieval-Augmented Generation (RAG)
 
-For URLs that remain ambiguous after the forensic pre-checks, ThreatLens queries a Retrieval-Augmented Generation knowledge base built over a curated, multi-regional dataset of 25,000 URLs, balanced evenly between benign and malicious labels (Section 4.1.2). Rather than embedding raw feature vectors, each URL is first translated into a natural-language structural description (for example, *"The URL is `<url>`. Length: `<N>`. Uses HTTPS: `<Yes/No>`. Is shortener: `<Yes/No>`. Suspicious TLD: `<Yes/No>`..."*), which is then embedded using the `all-MiniLM-L6-v2` sentence-transformer model and stored in a persistent ChromaDB vector index. This natural-language framing is intended to let the retrieval step group URLs by structural and behavioral similarity — for example, short, IP-hosted, non-HTTPS URLs — rather than relying on superficial string overlap. At inference time, the query URL is embedded using the same procedure, and the top-seven most similar stored documents are retrieved. A minimum cosine-similarity threshold of 0.85 is required before the retrieved evidence is permitted to influence the fusion score; below this threshold, the retrieval is treated as inconclusive, which prevents low-quality or coincidental structural matches from distorting the final verdict.
+#### 3.5.1 RAG Architecture & Regional Domain Adaptation Rationale
+
+To resolve regional distribution shifts without resorting to static feature hardcoding or continuous model retraining (Section 2.2), ThreatLens incorporates a Retrieval-Augmented Generation (RAG) knowledge retrieval tier. When a static classifier is evaluated on underrepresented regional domains (e.g., `.gov.mn`, `.gov.in`, `.ac.th`), performance degrades because the global model's decision boundaries do not capture localized naming conventions or regional hosting patterns. Rather than hardcoding static binary indicators into the model feature space—an approach that requires continuous jurisdiction-specific intervention—ThreatLens delegates regional threat intelligence to a dynamic, non-intrusive vector memory. New geographic domains, regional government portals, or emerging localized attack patterns are absorbed simply by appending documents to the vector knowledge base, preserving the frozen parameters of the primary ML classifier. The complete offline vector index construction and online retrieval architecture are illustrated in Figure 3 and detailed below.
+
+```mermaid
+flowchart TD
+    A[Regional Dataset
+rag_regional_enriched.csv · 25k URLs] --> B[Label Binarization & Cleaning
+benign=0, malicious=1]
+    B --> C[Stratified Sampling
+20,000 balanced documents]
+    C --> D[Natural Language Text Serialization
+generate_rag_string]
+    D --> E[Dense Vector Embedding
+all-MiniLM-L6-v2 · 384d space]
+    E --> F[ChromaDB Vector Indexing
+Cosine similarity · batch_size=256]
+    F --> G[(Persistent Vector Store
+url_knowledge_base)]
+    
+    H[Escalated Query URL] --> I[NL Text Serialization & Embedding]
+    I --> J[k-NN Vector Search
+k=7 nearest neighbors]
+    J --> K{Similarity Gate
+s_top > 0.85?}
+    K -->|Yes| L[Compute Malicious Ratio r_mal
+Forward to Tier 5 Fusion]
+    K -->|No| M[Inconclusive Retrieval Signal
+w_rag = 0]
+```
+
+**Figure 3.** Retrieval-Augmented Generation (RAG) Knowledge Base Construction, Vector Indexing, and Online Retrieval Pipeline.
+
+#### 3.5.2 Natural-Language Text Serialization Paradigm
+
+Standard vector retrieval systems in tabular domains often embed raw numerical feature vectors or key-value strings. In URL threat detection, however, embedding raw tabular feature vectors fails in metric space due to scale disparities and sparse binary flags. To solve this, ThreatLens converts each URL into a structured natural-language narrative descriptor prior to embedding (`generate_rag_string`). Formally, for a given URL $u$ and its extracted syntactic attributes $\mathbf{f}(u)$, the text serialization function $\mathcal{T}(u)$ generates a multi-sentence narrative document:
+
+$$\begin{aligned}
+\mathcal{T}(u) = \;&\text{"The URL is } u \text{. It has a length of } L \text{ characters.} \\
+&\text{Uses HTTPS: } H \text{. Uses raw IP address: } IP \text{.} \\
+&\text{Is shortener: } S \text{. Is official gov/edu: } G \text{.} \\
+&\text{Suspicious TLD: } T \text{. Brand impersonation: } B \text{.} \\
+&\text{Contains urgency words: } U \text{. Security keywords used: } K \text{.} \\
+&\text{Abnormal structure: } A \text{."}
+\end{aligned}$$
+
+where $L, H, IP, S, G, T, B, U, K, A$ are the human-readable text representations of the extracted lexical, structural, and semantic threat indicators. Serializing URLs into natural-language narratives allows pre-trained Transformer language models to leverage their rich linguistic pre-training to map structural and behavioral invariants (e.g., non-HTTPS, IP-hosted URLs with brand impersonation keywords) into a smooth, semantically meaningful metric manifold, grouping URLs by structural threat behavior rather than superficial string overlap.
+
+#### 3.5.3 Dense Vector Embedding and Vector Database Indexing
+
+The serialized text documents are embedded into a high-dimensional vector space using the `all-MiniLM-L6-v2` SentenceTransformer model, mapping each document descriptor to a 384-dimensional dense embedding vector $\mathbf{e} \in \mathbb{R}^{384}$. The vector database is constructed over a curated multi-regional corpus of 25,000 URLs (`rag_regional_enriched.csv`), spanning Mongolian (20%), Indian (20%), Russian (20%), Southeast Asian (20%), and global (20%) infrastructure. The corpus is stratified into a balanced sample of 20,000 documents ($10,000$ benign / $10,000$ malicious).
+
+Vectors are stored and indexed using a persistent `ChromaDB` vector database (`PersistentClient`) configured in Euclidean distance space. To maximize ingestion throughput during index construction, embeddings are generated and inserted in mini-batches of size $b=256$. The resulting index is persisted to disk under `rag_knowledge_base/chroma/` (`url_knowledge_base` collection), enabling fast sub-50 ms vector lookups at inference time without re-indexing.
+
+#### 3.5.4 k-Nearest Neighbor Retrieval ($k=7$) and Similarity Gating
+
+During real-time escalation, an ambiguous query URL $u_q$ is serialized to text $\mathcal{T}(u_q)$ and embedded to obtain query vector $\mathbf{e}_q \in \mathbb{R}^{384}$. The engine queries the vector store to retrieve the $k=7$ nearest historical neighbors. To prevent unbounded Euclidean distances $d_i = \|\mathbf{e}_q - \mathbf{e}_i\|_2$ from distorting fusion weighting, distance $d_i$ is mapped to a bounded similarity metric $s_i \in (0, 1]$ via inverse-distance weighting (`hybrid_predictor.py`):
+
+$$\mathcal{N}_k(u_q) = \{ (u_i, y_i, s_i) \}_{i=1}^k, \quad \text{where } s_i = \frac{1}{1 + d_i} = \frac{1}{1 + \|\mathbf{e}_q - \mathbf{e}_i\|_2}$$
+
+where $y_i \in \{0, 1\}$ represents the ground-truth binary label of retrieved document $i$, and $s_i \in (0, 1]$ represents the monotonically decreasing similarity score. To prevent low-quality or coincidental structural matches from introducing noise into downstream classification, an explicit similarity gate threshold is enforced:
+
+$$s_{\text{top}}(u_q) = \max_{i=1..k} s_i$$
+
+If $s_{\text{top}}(u_q) \le 0.85$, the retrieval result is deemed inconclusive and assigned zero weight ($\alpha_{\text{rag}} = 0$). If $s_{\text{top}}(u_q) > 0.85$, the system computes the malicious neighbor ratio:
+
+$$r_{\text{mal}}(u_q) = \frac{1}{k} \sum_{i=1}^k y_i$$
+
+Both $r_{\text{mal}}(u_q)$ and $s_{\text{top}}(u_q)$ are passed forward to Tier 5 for calibrated decision fusion (Section 3.7).
 
 ### 3.6 Tier 5: The Forensic Reasoning Engine
 
@@ -169,7 +276,7 @@ flowchart TD
     P -->|0.36-0.69| S([Borderline: Decision Fusion])
 ```
 
-**Figure 2.** Internal control loop of the deterministic Forensic Reasoning Engine, showing the sequential Thought-Action-Observation cycle across five live tools, followed by evidence reflection and a risk-tiered verdict.
+**Figure 4.** Internal control loop of the deterministic Forensic Reasoning Engine, showing the sequential Thought-Action-Observation cycle across five live tools, followed by evidence reflection and a risk-tiered verdict.
 
 ### 3.7 Decision Fusion
 
@@ -179,9 +286,23 @@ $$S_{\text{final}}(u) = w_{\text{ml}} \cdot P_{\text{ml}}(u) + w_{\text{forensic
 
 where $P_{\text{ml}}(u)$ is the machine learning risk probability (the model's malicious confidence if it predicted malicious, or one minus its benign confidence otherwise), $S_{\text{forensic}}(u)$ is the Forensic Reasoning Engine's weighted risk score, and $\Delta_{\text{rag}}(u)$ is a similarity-gated adjustment derived from RAG retrieval (defined below). The nominal weighting is $w_{\text{ml}} = 0.40$ and $w_{\text{forensic}} = 0.60$; this choice is empirically justified in Section 5.6.
 
-A **veto mechanism** modifies this weighting when the Forensic Reasoning Engine produces a strong verdict in either direction. If the forensic risk score falls below 0.45 (indicating clearly benign live evidence) or above 0.80 (indicating clearly malicious live evidence), the weighting shifts to $w_{\text{ml}} = 0.10$, $w_{\text{forensic}} = 0.90$, giving the forensic engine effective veto power in cases where it has gathered strong, direct live evidence (for example, confirmed credential-harvesting content on the live page, or a confirmed official government domain). In the intermediate range (forensic risk between 0.45 and 0.80), the standard 0.40/0.60 weighting is applied.
+A **veto mechanism** modifies this weighting when the Forensic Reasoning Engine produces a strong verdict in either direction. If the forensic risk score falls below 0.45 (indicating clearly benign live evidence) or above 0.80 (indicating clearly malicious live evidence), the weighting shifts to $w_{\text{ml}} = 0.10$, $w_{\text{forensic}} = 0.90$, giving the forensic engine effective veto power in cases where it has gathered strong, direct live evidence (for example, confirmed credential-harvesting content on the live page, or a confirmed official government domain). In the intermediate range (forensic risk between 0.45 and 0.80), the standard 0.40/0.60 weighting is applied. Formally:
+
+$$(w_{\text{ml}},\; w_{\text{forensic}}) = \begin{cases} (0.10,\; 0.90) & \text{if } S_{\text{forensic}}(u) < 0.45 \;\text{ or }\; S_{\text{forensic}}(u) > 0.80 \\ (0.40,\; 0.60) & \text{otherwise} \end{cases}$$
 
 If RAG retrieval returned results with a top similarity score above the 0.85 gating threshold (Section 3.5), a further adjustment blends the retrieved malicious-neighbor ratio into the fused score, with the blend weight scaled by the similarity score itself and further reduced (to 5% rather than 25%) when the forensic engine has already issued a strong veto-triggering verdict, to avoid the retrieval signal overriding strong direct evidence. A final verdict of `MALICIOUS` is issued when $S_{\text{final}}(u) > 0.50$, and `BENIGN` otherwise; the corresponding confidence score is calibrated as $\min(0.99,\ 0.55 + 0.80 \cdot |S_{\text{final}}(u) - 0.50|)$.
+
+Formally, let $S'(u) = w_{\text{ml}} \cdot P_{\text{ml}}(u) + w_{\text{forensic}} \cdot S_{\text{forensic}}(u)$ denote the pre-RAG fused score, $s_{\text{top}}(u)$ the cosine similarity of the nearest retrieved neighbor, and $r_{\text{mal}}(u)$ the fraction of malicious labels among the top-$k$ retrieved neighbors. The RAG blend weight is defined as:
+
+$$\alpha_{\text{rag}}(u) = \begin{cases} 0 & \text{if } s_{\text{top}}(u) \leq 0.85 \\ s_{\text{top}}(u) \times 0.05 & \text{if } s_{\text{top}}(u) > 0.85 \text{ and } (S_{\text{forensic}}(u) < 0.45 \text{ or } S_{\text{forensic}}(u) > 0.80) \\ s_{\text{top}}(u) \times 0.25 & \text{if } s_{\text{top}}(u) > 0.85 \text{ and } 0.45 \leq S_{\text{forensic}}(u) \leq 0.80 \end{cases}$$
+
+The RAG-adjusted final score, binary verdict, and calibrated confidence are then given by:
+
+$$S_{\text{final}}(u) = S'(u) \cdot (1 - \alpha_{\text{rag}}(u)) + r_{\text{mal}}(u) \cdot \alpha_{\text{rag}}(u)$$
+
+$$V(u) = \begin{cases} \texttt{MALICIOUS} & \text{if } S_{\text{final}}(u) > 0.50 \\ \texttt{BENIGN} & \text{otherwise} \end{cases}$$
+
+$$C(u) = \min\!\left(0.99,\; 0.55 + 0.80 \cdot \left|S_{\text{final}}(u) - 0.50\right|\right)$$
 
 ```mermaid
 flowchart TD
@@ -196,7 +317,7 @@ flowchart TD
     G -->|No| I([BENIGN])
 ```
 
-**Figure 3.** Decision fusion pipeline combining the ML classifier's prior, the Forensic Reasoning Engine's weighted evidence score, and a similarity-gated RAG adjustment into a single calibrated verdict.
+**Figure 5.** Decision fusion pipeline combining the ML classifier's prior, the Forensic Reasoning Engine's weighted evidence score, and a similarity-gated RAG adjustment into a single calibrated verdict.ighted evidence score, and a similarity-gated RAG adjustment into a single calibrated verdict.
 
 ------------------------------------------------------------------------
 
